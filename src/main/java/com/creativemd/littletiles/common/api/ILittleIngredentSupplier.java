@@ -7,7 +7,7 @@ import com.creativemd.littletiles.common.util.ingredient.LittleIngredients;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.item.ItemStack;
 
-public interface ILittleIngredientSupplier {
+public interface ILittleIngredentSupplier {
 	
 	/** Requests ingredients which are not available directly
 	 * 
@@ -18,10 +18,6 @@ public interface ILittleIngredientSupplier {
 	 * @param overflow
 	 *            the overflow ingredients
 	 * @param player
-	 *            the player that is requesting the material 
-	 * @param simulate
-	 * 			  whether to simulate the request
-	 *            */
-	
-	public void requestIngredients(ItemStack stack, LittleIngredients ingredients, LittleIngredients overflow, @Nullable EntityPlayer player, boolean simulate);
+	 *            the player that is requesting the material */
+	public void requestIngredients(ItemStack stack, LittleIngredients ingredients, LittleIngredients overflow, @Nullable EntityPlayer player);
 }

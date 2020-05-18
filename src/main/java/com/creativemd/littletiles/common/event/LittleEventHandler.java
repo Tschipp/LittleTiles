@@ -38,8 +38,8 @@ import com.creativemd.littletiles.common.util.ingredient.LittleIngredients;
 import com.creativemd.littletiles.common.util.ingredient.LittleInventory;
 import com.creativemd.littletiles.common.util.ingredient.NotEnoughIngredientsException;
 import com.creativemd.littletiles.common.util.place.PlacementHelper;
-import com.creativemd.littletiles.common.util.place.PlacementHelper.PositionResult;
 import com.creativemd.littletiles.common.util.place.PlacementMode;
+import com.creativemd.littletiles.common.util.place.PlacementPosition;
 
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
@@ -172,8 +172,15 @@ public class LittleEventHandler {
 	}
 	
 	@SideOnly(Side.CLIENT)
+	private static ResourceLocation RES_UNDERWATER_OVERLAY;
+	
+	@SideOnly(Side.CLIENT)
 	@SubscribeEvent
 	public void renderOverlay(RenderBlockOverlayEvent event) {
+		if (RES_UNDERWATER_OVERLAY == null)
+			RES_UNDERWATER_OVERLAY = new ResourceLocation("textures/misc/underwater.png");
+		
+		Minecraft mc = Minecraft.getMinecraft();
 		if (event.getOverlayType() == OverlayType.WATER) {
 			EntityPlayer player = event.getPlayer();
 			double d0 = player.posY + player.getEyeHeight();
@@ -183,18 +190,14 @@ public class LittleEventHandler {
 				AxisAlignedBB bb = player.getEntityBoundingBox();
 				for (LittleTile tile : ((TileEntityLittleTiles) te)) {
 					if (tile instanceof LittleTileColored && tile.isMaterial(Material.WATER) && tile.box.getBox(tile.getContext(), blockpos).intersects(bb)) {
-						Vec3d color = ColorUtils.IntToVec(((LittleTileColored) tile).color);
-						// GlStateManager.color((float) color.x, (float) color.y, (float) color.z);
-						Minecraft mc = Minecraft.getMinecraft();
-						mc.getTextureManager().bindTexture(new ResourceLocation("textures/misc/underwater.png"));
+						
+						mc.getTextureManager().bindTexture(RES_UNDERWATER_OVERLAY);
 						Tessellator tessellator = Tessellator.getInstance();
 						BufferBuilder bufferbuilder = tessellator.getBuffer();
 						float f = mc.player.getBrightness();
+						Vec3d color = ColorUtils.IntToVec(((LittleTileColored) tile).color);
 						GlStateManager.color(f * (float) color.x, f * (float) color.y, f * (float) color.z, 0.5F);
 						GlStateManager.enableBlend();
-						// GlStateManager.tryBlendFuncSeparate(GlStateManager.SourceFactor.SRC_ALPHA,
-						// GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA,
-						// GlStateManager.SourceFactor.ONE, GlStateManager.DestFactor.ZERO);
 						GlStateManager.tryBlendFuncSeparate(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA, GlStateManager.SourceFactor.ONE, GlStateManager.DestFactor.ZERO);
 						GlStateManager.pushMatrix();
 						float f1 = 4.0F;
@@ -211,10 +214,10 @@ public class LittleEventHandler {
 						bufferbuilder.pos(1.0D, 1.0D, -0.5D).tex(0.0F + f7, 0.0F + f8).endVertex();
 						bufferbuilder.pos(-1.0D, 1.0D, -0.5D).tex(4.0F + f7, 0.0F + f8).endVertex();
 						tessellator.draw();
-						
 						GlStateManager.popMatrix();
 						GlStateManager.color(1.0F, 1.0F, 1.0F, 1.0F);
 						GlStateManager.disableBlend();
+						
 						event.setCanceled(true);
 						return;
 					}
@@ -318,13 +321,13 @@ public class LittleEventHandler {
 	}
 	
 	@SideOnly(Side.CLIENT)
-	public static PositionResult getPosition(World world, ILittleTile iTile, ItemStack stack, RayTraceResult result) {
+	public static PlacementPosition getPosition(World world, ILittleTile iTile, ItemStack stack, RayTraceResult result) {
 		return PreviewRenderer.marked != null ? PreviewRenderer.marked.position.copy() : PlacementHelper.getPosition(world, result, iTile.getPositionContext(stack), iTile, stack);
 	}
 	
 	@SideOnly(Side.CLIENT)
 	public void onRightInteractClient(ILittleTile iTile, EntityPlayer player, EnumHand hand, World world, ItemStack stack, BlockPos pos, EnumFacing facing) {
-		PositionResult position = getPosition(world, iTile, stack, Minecraft.getMinecraft().objectMouseOver);
+		PlacementPosition position = getPosition(world, iTile, stack, Minecraft.getMinecraft().objectMouseOver);
 		if (iTile.onRightClick(world, player, stack, position.copy(), Minecraft.getMinecraft().objectMouseOver)) {
 			if (!stack.isEmpty() && player.canPlayerEdit(pos.offset(facing), facing, stack)) {
 				PlacementMode mode = iTile.getPlacementMode(stack).place();

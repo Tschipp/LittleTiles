@@ -600,7 +600,7 @@ public class LittleTile implements ICombinable {
 	// ================Placing================
 	
 	/** stack may be null **/
-	public void onPlaced(@Nullable EntityPlayer player, ItemStack stack, @Nullable EnumFacing facing) {
+	public void placed(@Nullable EntityPlayer player, @Nullable EnumFacing facing) {
 		
 	}
 	
@@ -843,6 +843,8 @@ public class LittleTile implements ICombinable {
 	}
 	
 	public Vec3d getFogColor(World world, BlockPos pos, IBlockState state, Entity entity, Vec3d originalColor, float partialTicks) {
+		if (hasSpecialBlockHandler())
+			return handler.getFogColor(world, this, pos, getBlockState(), entity, originalColor, partialTicks);
 		return originalColor;
 	}
 	

@@ -27,7 +27,6 @@ import com.creativemd.littletiles.common.structure.registry.LittleStructureGuiPa
 import com.creativemd.littletiles.common.structure.registry.LittleStructureRegistry;
 import com.creativemd.littletiles.common.tile.preview.LittlePreview;
 import com.creativemd.littletiles.common.tile.preview.LittlePreviews;
-import com.creativemd.littletiles.common.tile.preview.LittlePreviewsStructure;
 import com.n247s.api.eventapi.eventsystem.CustomEventSubscribe;
 
 import net.minecraft.item.ItemStack;
@@ -67,14 +66,14 @@ public class SubGuiRecipe extends SubGuiConfigure implements IAnimationControl {
 		addPreviews(previews, hierarchy, hierarchyStacks, hierarchyNames, "", null, -1);
 	}
 	
-	protected static void addPreviews(LittlePreviews previews, List<StructureHolder> hierarchy, List<ItemStack> stacks, List<String> lines, String prefix, LittlePreviews parent, int childId) {
+	protected static void addPreviews(LittlePreviews previews, List<StructureHolder> hierarchy, List<ItemStack> stacks, List<String> lines, String prefix, StructureHolder parent, int childId) {
 		StructureHolder holder = new StructureHolder(parent, childId, hierarchy.size());
 		holder.previews = previews;
 		holder.prefix = prefix;
 		lines.add(holder.getDisplayName());
 		
 		ItemStack stack = new ItemStack(LittleTiles.multiTiles);
-		LittlePreviews newPreviews = new LittlePreviews(previews.context);
+		LittlePreviews newPreviews = new LittlePreviews(previews.getContext());
 		int minX = Integer.MAX_VALUE;
 		int minY = Integer.MAX_VALUE;
 		int minZ = Integer.MAX_VALUE;
@@ -100,7 +99,7 @@ public class SubGuiRecipe extends SubGuiConfigure implements IAnimationControl {
 		if (previews.hasChildren()) {
 			int i = 0;
 			for (LittlePreviews child : previews.getChildren()) {
-				addPreviews(child, hierarchy, stacks, lines, prefix + "-", previews, i);
+				addPreviews(child, hierarchy, stacks, lines, prefix + "-", holder, i);
 				i++;
 			}
 		}
@@ -206,7 +205,7 @@ public class SubGuiRecipe extends SubGuiConfigure implements IAnimationControl {
 		
 		LittlePreviews previews = holder.previews;
 		
-		LittleStructure structure = previews.getStructure();
+		LittleStructure structure = previews.createStructure();
 		
 		GuiComboBoxCategory comboBox = (GuiComboBoxCategory) get("types");
 		this.structure = structure;
@@ -279,7 +278,7 @@ public class SubGuiRecipe extends SubGuiConfigure implements IAnimationControl {
 	
 	public void finializePreview(LittlePreviews previews) {
 		if (previews.hasStructure())
-			previews.getStructure().finializePreview(previews);
+			previews.getStructureType().finializePreview(previews);
 		
 		if (previews.hasChildren())
 			for (LittlePreviews child : previews.getChildren())
@@ -297,13 +296,12 @@ public class SubGuiRecipe extends SubGuiConfigure implements IAnimationControl {
 			
 			NBTTagCompound structureNBT = new NBTTagCompound();
 			structure.writeToNBT(structureNBT);
-			selected.previews = new LittlePreviewsStructure(structureNBT, oldPreviews.context);
+			selected.previews = new LittlePreviews(structureNBT, oldPreviews);
 		} else
-			selected.previews = new LittlePreviews(oldPreviews.context);
+			selected.previews = new LittlePreviews(oldPreviews);
 		
-		selected.previews.assign(oldPreviews);
 		if (selected.parent != null)
-			selected.parent.updateChild(selected.childId, selected.previews);
+			selected.parent.previews.updateChild(selected.childId, selected.previews);
 		else
 			previews = selected.previews;
 		
@@ -359,14 +357,14 @@ public class SubGuiRecipe extends SubGuiConfigure implements IAnimationControl {
 	
 	public static class StructureHolder {
 		
-		public final LittlePreviews parent;
+		public final StructureHolder parent;
 		public final int childId;
 		public final int index;
 		public String prefix;
 		public ItemStack explicit;
 		public LittlePreviews previews;
 		
-		public StructureHolder(LittlePreviews parent, int childId, int index) {
+		public StructureHolder(StructureHolder parent, int childId, int index) {
 			this.parent = parent;
 			this.childId = childId;
 			this.index = index;

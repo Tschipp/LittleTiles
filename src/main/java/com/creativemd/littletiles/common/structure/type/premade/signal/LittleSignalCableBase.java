@@ -1,11 +1,10 @@
-package com.creativemd.littletiles.common.structure.premade.signal;
+package com.creativemd.littletiles.common.structure.type.premade.signal;
 
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map.Entry;
 
-import com.creativemd.creativecore.client.rendering.RenderCubeObject;
 import com.creativemd.creativecore.common.utils.math.RotationUtils;
 import com.creativemd.creativecore.common.utils.math.box.CubeObject;
 import com.creativemd.creativecore.common.utils.mc.ColorUtils;
@@ -14,11 +13,10 @@ import com.creativemd.littletiles.LittleTiles;
 import com.creativemd.littletiles.client.render.tile.LittleRenderingCube;
 import com.creativemd.littletiles.common.structure.LittleStructure;
 import com.creativemd.littletiles.common.structure.attribute.LittleStructureAttribute;
-import com.creativemd.littletiles.common.structure.premade.LittleStructurePremade;
 import com.creativemd.littletiles.common.structure.registry.LittleStructureType;
 import com.creativemd.littletiles.common.structure.signal.ISignalBase;
-import com.creativemd.littletiles.common.structure.signal.ISignalTransmitter;
 import com.creativemd.littletiles.common.structure.signal.SignalNetwork;
+import com.creativemd.littletiles.common.structure.type.premade.LittleStructurePremade;
 import com.creativemd.littletiles.common.tile.LittleTile;
 import com.creativemd.littletiles.common.tile.LittleTileColored;
 import com.creativemd.littletiles.common.tile.math.box.LittleAbsoluteBox;
@@ -42,18 +40,15 @@ import net.minecraft.world.World;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
 
-public class LittleSignalCable extends LittleStructurePremade implements ISignalTransmitter {
+public abstract class LittleSignalCableBase extends LittleStructurePremade implements ISignalBase {
 	
-	public LittleCableFace[] faces = new LittleCableFace[6];
 	private SignalNetwork network;
 	
-	public LittleSignalCable(LittleStructureType type) {
-		super(type);
-	}
+	protected LittleConnectionFace[] faces;
 	
-	@Override
-	public int getBandwidth() {
-		return ((LittleStructureTypeCable) type).bandwidth;
+	public LittleSignalCableBase(LittleStructureType type) {
+		super(type);
+		this.faces = new LittleConnectionFace[getNumberOfConnections()];
 	}
 	
 	@Override
@@ -67,6 +62,94 @@ public class LittleSignalCable extends LittleStructurePremade implements ISignal
 	}
 	
 	@Override
+	protected void loadFromNBTExtra(NBTTagCompound nbt) {
+		int[] result = nbt.getIntArray("faces");
+		if (result != null && result.length == getNumberOfConnections() * 2)
+			for (int i = 0; i < faces.length; i++) {
+				int distance = result[i * 2];
+				if (distance < 0)
+					faces[i] = null;
+				else {
+					faces[i] = new LittleConnectionFace();
+					faces[i].distance = distance;
+					faces[i].context = LittleGridContext.get(result[i * 2 + 1]);
+				}
+			}
+	}
+	
+	@Override
+	protected void writeToNBTExtra(NBTTagCompound nbt) {
+		int[] result = new int[getNumberOfConnections() * 2];
+		for (int i = 0; i < faces.length; i++) {
+			if (faces[i] != null) {
+				result[i * 2] = faces[i].distance;
+				result[i * 2 + 1] = faces[i].context.size;
+			} else {
+				result[i * 2] = -1;
+				result[i * 2 + 1] = 0;
+			}
+		}
+		nbt.setIntArray("faces", result);
+	}
+	
+	public abstract EnumFacing getFacing(int index);
+	
+	public abstract int getIndex(EnumFacing facing);
+	
+	@Override
+	public int getBandwidth() {
+		return ((LittleStructureTypeNetwork) type).bandwidth;
+	}
+	
+	public int getNumberOfConnections() {
+		return ((LittleStructureTypeNetwork) type).numberOfConnections;
+	}
+	
+	@Override
+	public void connect(EnumFacing facing, ISignalBase base, LittleGridContext context, int distance) {
+		int index = getIndex(facing);
+		if (faces[index] != null) {
+			if (faces[index].getConnection() == base)
+				return;
+			faces[index].disconnect(facing);
+		} else
+			faces[index] = new LittleConnectionFace();
+		faces[index].connect(base, context, distance);
+		
+	}
+	
+	@Override
+	public void disconnect(EnumFacing facing, ISignalBase base) {
+		int index = getIndex(facing);
+		if (faces[index] != null) {
+			faces[index] = null;
+			updateStructure();
+		}
+	}
+	
+	@Override
+	public void neighbourChanged() {
+		if (getWorld().isRemote || !load())
+			return;
+		
+		LittleAbsoluteBox box = new SurroundingBox(false).add(tiles.entrySet()).getAbsoluteBox();
+		
+		for (int i = 0; i < faces.length; i++) {
+			EnumFacing facing = getFacing(i);
+			
+			LittleConnectResult result = checkConnection(facing, box);
+			if (result != null) {
+				this.connect(facing, result.base, result.context, result.distance);
+				result.base.connect(facing.getOpposite(), this, result.context, result.distance);
+			} else {
+				if (faces[i] != null)
+					faces[i].disconnect(facing);
+				faces[i] = null;
+			}
+		}
+	}
+	
+	@Override
 	public Iterator<ISignalBase> connections() {
 		if (load())
 			return new Iterator<ISignalBase>() {
@@ -75,7 +158,7 @@ public class LittleSignalCable extends LittleStructurePremade implements ISignal
 				LittleAbsoluteBox box = new SurroundingBox(false).add(tiles.entrySet()).getAbsoluteBox();
 				
 				int searchForNextIndex(int index) {
-					while (index < 6 && (faces[index] == null || !faces[index].verifyConnect(EnumFacing.VALUES[index], box))) {
+					while (index < faces.length && (faces[index] == null || !faces[index].verifyConnect(getFacing(index), box))) {
 						faces[index] = null;
 						index++;
 					}
@@ -84,7 +167,7 @@ public class LittleSignalCable extends LittleStructurePremade implements ISignal
 				
 				@Override
 				public boolean hasNext() {
-					return index < 6 && faces[index] != null;
+					return index < faces.length && faces[index] != null;
 				}
 				
 				@Override
@@ -190,151 +273,92 @@ public class LittleSignalCable extends LittleStructurePremade implements ISignal
 	}
 	
 	@Override
-	public boolean canConnect(EnumFacing facing) {
-		return true;
-	}
-	
-	@Override
-	public void connect(EnumFacing facing, ISignalBase base, LittleGridContext context, int distance) {
-		int index = facing.ordinal();
-		if (faces[index] != null) {
-			if (faces[index].getConnection() == base)
-				return;
-			faces[index].disconnect(facing);
-		} else
-			faces[index] = new LittleCableFace();
-		faces[index].connect(base, context, distance);
-		
-	}
-	
-	@Override
-	public void disconnect(EnumFacing facing, ISignalBase base) {
-		int index = facing.ordinal();
-		if (faces[index] != null)
-			faces[index] = null;
-	}
-	
-	@Override
-	protected void loadFromNBTExtra(NBTTagCompound nbt) {
-		int[] result = nbt.getIntArray("faces");
-		if (result != null && result.length == 12)
-			for (int i = 0; i < faces.length; i++) {
-				int distance = result[i * 2];
-				if (distance < 0)
-					faces[i] = null;
-				else {
-					faces[i] = new LittleCableFace();
-					faces[i].distance = distance;
-					faces[i].context = LittleGridContext.get(result[i * 2 + 1]);
-				}
-			}
-	}
-	
-	@Override
-	protected void writeToNBTExtra(NBTTagCompound nbt) {
-		int[] result = new int[12];
-		for (int i = 0; i < faces.length; i++) {
-			if (faces[i] != null) {
-				result[i * 2] = faces[i].distance;
-				result[i * 2 + 1] = faces[i].context.size;
-			} else {
-				result[i * 2] = -1;
-				result[i * 2 + 1] = 0;
-			}
-		}
-		nbt.setIntArray("faces", result);
-	}
-	
-	@Override
-	public void neighbourChanged() {
-		if (getWorld().isRemote || !load())
-			return;
-		
-		LittleAbsoluteBox box = new SurroundingBox(false).add(tiles.entrySet()).getAbsoluteBox();
-		
-		for (int i = 0; i < faces.length; i++) {
-			EnumFacing facing = EnumFacing.VALUES[i];
-			
-			LittleConnectResult result = checkConnection(facing, box);
-			if (result != null) {
-				this.connect(facing, result.base, result.context, result.distance);
-				result.base.connect(facing.getOpposite(), this, result.context, result.distance);
-			} else {
-				if (faces[i] != null)
-					faces[i].disconnect(facing);
-				faces[i] = null;
-			}
-		}
-	}
-	
-	@Override
 	@SideOnly(Side.CLIENT)
 	public void getRenderingCubes(BlockPos pos, BlockRenderLayer layer, List<LittleRenderingCube> cubes) {
+		if (layer != BlockRenderLayer.SOLID)
+			return;
 		int color = getMainTile() instanceof LittleTileColored ? ((LittleTileColored) getMainTile()).color : ColorUtils.WHITE;
+		SurroundingBox box = new SurroundingBox(false).add(tiles.entrySet());
 		
+		LittleVec min = box.getMinPosOffset();
+		LittleVec max = box.getSize();
+		max.add(min);
+		LittleBox overallBox = new LittleBox(min, max);
+		BlockPos difference = pos.subtract(box.getMinPos());
+		overallBox.sub(box.getContext().toGrid(difference.getX()), box.getContext().toGrid(difference.getY()), box.getContext().toGrid(difference.getZ()));
+		
+		render(box, overallBox, cubes, color);
+	}
+	
+	@SideOnly(Side.CLIENT)
+	public void renderFace(EnumFacing facing, LittleGridContext context, LittleBox renderBox, int distance, Axis axis, Axis one, Axis two, boolean positive, int color, List<LittleRenderingCube> cubes) {
+		if (positive) {
+			renderBox.setMin(axis, renderBox.getMax(axis));
+			renderBox.setMax(axis, renderBox.getMax(axis) + distance);
+		} else {
+			renderBox.setMax(axis, renderBox.getMin(axis));
+			renderBox.setMin(axis, renderBox.getMin(axis) - distance);
+		}
+		
+		LittleRenderingCube cube = renderBox.getRenderingCube(context, LittleTiles.singleCable, axis.ordinal());
+		if (positive)
+			cube.setMax(axis, cube.getMin(axis) + cube.getSize(axis) / 2);
+		else
+			cube.setMin(axis, cube.getMax(axis) - cube.getSize(axis) / 2);
+		
+		cube.color = color;
+		cube.keepVU = true;
+		cube.allowOverlap = true;
+		float shrink = 0.18F;
+		float shrinkOne = cube.getSize(one) * shrink;
+		float shrinkTwo = cube.getSize(two) * shrink;
+		cube.setMin(one, cube.getMin(one) + shrinkOne);
+		cube.setMax(one, cube.getMax(one) - shrinkOne);
+		cube.setMin(two, cube.getMin(two) + shrinkTwo);
+		cube.setMax(two, cube.getMax(two) - shrinkTwo);
+		cubes.add(cube);
+	}
+	
+	@SideOnly(Side.CLIENT)
+	public void render(SurroundingBox box, LittleBox overallBox, List<LittleRenderingCube> cubes, int color) {
 		for (int i = 0; i < faces.length; i++) {
 			if (faces[i] == null)
 				continue;
 			
 			int distance = faces[i].distance;
-			EnumFacing facing = EnumFacing.VALUES[i];
-			SurroundingBox box = new SurroundingBox(false).add(tiles.entrySet());
-			LittleGridContext context = faces[i].context;
-			
-			if (box.getContext().size > context.size) {
-				distance *= box.getContext().size / context.size;
-				context = box.getContext();
-			} else if (context.size > box.getContext().size)
-				box.convertTo(context);
+			EnumFacing facing = getFacing(i);
 			
 			Axis axis = facing.getAxis();
 			Axis one = RotationUtils.getDifferentAxisFirst(axis);
 			Axis two = RotationUtils.getDifferentAxisSecond(axis);
 			boolean positive = facing.getAxisDirection() == AxisDirection.POSITIVE;
+			LittleGridContext context = faces[i].context;
 			
-			LittleVec min = box.getMinPosOffset();
-			LittleVec size = box.getSize();
-			LittleVec max = size.copy();
-			max.add(min);
-			LittleBox renderBox = new LittleBox(min, max);
-			BlockPos difference = pos.subtract(box.getMinPos());
-			renderBox.sub(context.toGrid(difference.getX()), context.toGrid(difference.getY()), context.toGrid(difference.getZ()));
+			LittleBox renderBox = overallBox.copy();
 			
-			int internalAxisOffset = positive ? (int) (max.get(axis) - RotationUtils.get(axis, difference) * context.size) : min.get(axis) - RotationUtils.get(axis, difference) * context.size;
-			if (positive) {
-				renderBox.setMin(axis, internalAxisOffset);
-				renderBox.setMax(axis, internalAxisOffset + distance);
-			} else {
-				renderBox.setMin(axis, internalAxisOffset - distance);
-				renderBox.setMax(axis, internalAxisOffset);
-			}
+			if (box.getContext().size > context.size) {
+				distance *= box.getContext().size / context.size;
+				context = box.getContext();
+			} else if (context.size > box.getContext().size)
+				renderBox.convertTo(box.getContext(), context);
 			
-			LittleRenderingCube cube = renderBox.getRenderingCube(context, LittleTiles.singleCable, axis.ordinal());
-			cube.color = color;
-			cube.keepVU = true;
-			cube.allowOverlap = true;
-			float shrink = (float) context.toVanillaGrid(size.get(axis)) * 0.18F;
-			cube.setMin(one, cube.getMin(one) + shrink);
-			cube.setMax(one, cube.getMax(one) - shrink);
-			cube.setMin(two, cube.getMin(two) + shrink);
-			cube.setMax(two, cube.getMax(two) - shrink);
-			cubes.add(cube);
+			renderFace(facing, context, renderBox, distance, axis, one, two, positive, color, cubes);
 		}
 	}
 	
-	public class LittleCableFace {
+	public class LittleConnectionFace {
 		
-		private ISignalBase connection;
-		private int distance;
-		private LittleGridContext context;
+		public ISignalBase connection;
+		public int distance;
+		public LittleGridContext context;
 		
-		public LittleCableFace() {
+		public LittleConnectionFace() {
 			
 		}
 		
 		public void disconnect(EnumFacing facing) {
 			if (connection != null)
-				connection.disconnect(facing.getOpposite(), LittleSignalCable.this);
+				connection.disconnect(facing.getOpposite(), LittleSignalCableBase.this);
 			if (hasNetwork())
 				getNetwork().remove(connection);
 			connection = null;
@@ -393,29 +417,15 @@ public class LittleSignalCable extends LittleStructurePremade implements ISignal
 		
 	}
 	
-	public static class LittleStructureTypeCable extends LittleStructureTypePremade {
+	public static abstract class LittleStructureTypeNetwork extends LittleStructureTypePremade {
 		
 		public final int bandwidth;
+		public final int numberOfConnections;
 		
-		@SideOnly(Side.CLIENT)
-		public List<RenderCubeObject> cubes;
-		
-		public LittleStructureTypeCable(String id, String category, Class<? extends LittleStructure> structureClass, int attribute, String modid, int bandwidth) {
+		public LittleStructureTypeNetwork(String id, String category, Class<? extends LittleStructure> structureClass, int attribute, String modid, int bandwidth, int numberOfConnections) {
 			super(id, category, structureClass, attribute | LittleStructureAttribute.NEIGHBOR_LISTENER, modid);
 			this.bandwidth = bandwidth;
-		}
-		
-		@Override
-		@SideOnly(Side.CLIENT)
-		public List<RenderCubeObject> getRenderingCubes() {
-			if (cubes == null) {
-				float size = (float) ((Math.sqrt(bandwidth) * 1F / 32F) * 1.4);
-				cubes = new ArrayList<>();
-				cubes.add(new RenderCubeObject(0, 0.5F - size, 0.5F - size, size * 2, 0.5F + size, 0.5F + size, LittleTiles.coloredBlock).setColor(-13619152));
-				cubes.add(new RenderCubeObject(0 + size * 2, 0.5F - size * 0.8F, 0.5F - size * 0.8F, 1 - size * 2, 0.5F + size * 0.8F, 0.5F + size * 0.8F, LittleTiles.singleCable).setColor(-13619152).setKeepUV(true));
-				cubes.add(new RenderCubeObject(1 - size * 2, 0.5F - size, 0.5F - size, 1, 0.5F + size, 0.5F + size, LittleTiles.coloredBlock).setColor(-13619152));
-			}
-			return cubes;
+			this.numberOfConnections = numberOfConnections;
 		}
 		
 		@Override
@@ -428,7 +438,7 @@ public class LittleSignalCable extends LittleStructurePremade implements ISignal
 				TileEntity tileEntity = world.getTileEntity(pos.offset(facing));
 				if (tileEntity instanceof TileEntityLittleTiles) {
 					for (LittleStructure structure : ((TileEntityLittleTiles) tileEntity).allStructures()) {
-						if (structure instanceof LittleSignalCable && ((LittleSignalCable) structure).getBandwidth() == bandwidth) {
+						if (structure instanceof ISignalBase && ((ISignalBase) structure).getBandwidth() == bandwidth && ((ISignalBase) structure).canConnect(facing.getOpposite())) {
 							LittleRenderingCube cube = new LittleRenderingCube(new CubeObject(structure.getSurroundingBox().offset(-tileEntity.getPos().getX(), -tileEntity.getPos().getY(), -tileEntity.getPos().getZ())), null, Blocks.AIR, 0);
 							cube.setMin(axis, 0);
 							cube.setMax(axis, 1);
@@ -437,28 +447,41 @@ public class LittleSignalCable extends LittleStructurePremade implements ISignal
 					}
 					
 				}
-				
 			}
 			
 			TileEntity tileEntity = world.getTileEntity(pos);
 			if (tileEntity instanceof TileEntityLittleTiles) {
 				for (LittleStructure structure : ((TileEntityLittleTiles) tileEntity).allStructures()) {
-					if (structure instanceof LittleSignalCable && ((LittleSignalCable) structure).getBandwidth() == bandwidth) {
+					if (structure instanceof ISignalBase && ((ISignalBase) structure).getBandwidth() == bandwidth) {
 						AxisAlignedBB box = structure.getSurroundingBox().offset(-tileEntity.getPos().getX(), -tileEntity.getPos().getY(), -tileEntity.getPos().getZ());
-						LittleRenderingCube cube = new LittleRenderingCube(new CubeObject(box), null, Blocks.AIR, 0);
-						cube.setMin(Axis.X, 0);
-						cube.setMax(Axis.X, 1);
-						cubes.add(cube);
+						LittleRenderingCube cube;
 						
-						cube = new LittleRenderingCube(new CubeObject(box), null, Blocks.AIR, 0);
-						cube.setMin(Axis.Y, 0);
-						cube.setMax(Axis.Y, 1);
-						cubes.add(cube);
+						if (((ISignalBase) structure).canConnect(EnumFacing.WEST) || ((ISignalBase) structure).canConnect(EnumFacing.EAST)) {
+							cube = new LittleRenderingCube(new CubeObject(box), null, Blocks.AIR, 0);
+							if (((ISignalBase) structure).canConnect(EnumFacing.WEST))
+								cube.setMin(Axis.X, 0);
+							if (((ISignalBase) structure).canConnect(EnumFacing.EAST))
+								cube.setMax(Axis.X, 1);
+							cubes.add(cube);
+						}
 						
-						cube = new LittleRenderingCube(new CubeObject(box), null, Blocks.AIR, 0);
-						cube.setMin(Axis.Z, 0);
-						cube.setMax(Axis.Z, 1);
-						cubes.add(cube);
+						if (((ISignalBase) structure).canConnect(EnumFacing.DOWN) || ((ISignalBase) structure).canConnect(EnumFacing.UP)) {
+							cube = new LittleRenderingCube(new CubeObject(box), null, Blocks.AIR, 0);
+							if (((ISignalBase) structure).canConnect(EnumFacing.DOWN))
+								cube.setMin(Axis.Y, 0);
+							if (((ISignalBase) structure).canConnect(EnumFacing.UP))
+								cube.setMax(Axis.Y, 1);
+							cubes.add(cube);
+						}
+						
+						if (((ISignalBase) structure).canConnect(EnumFacing.NORTH) || ((ISignalBase) structure).canConnect(EnumFacing.SOUTH)) {
+							cube = new LittleRenderingCube(new CubeObject(box), null, Blocks.AIR, 0);
+							if (((ISignalBase) structure).canConnect(EnumFacing.NORTH))
+								cube.setMin(Axis.Z, 0);
+							if (((ISignalBase) structure).canConnect(EnumFacing.SOUTH))
+								cube.setMax(Axis.Z, 1);
+							cubes.add(cube);
+						}
 					}
 				}
 				
@@ -467,7 +490,6 @@ public class LittleSignalCable extends LittleStructurePremade implements ISignal
 				return null;
 			return cubes;
 		}
-		
 	}
 	
 }

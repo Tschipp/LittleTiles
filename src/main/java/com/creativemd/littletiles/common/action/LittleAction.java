@@ -21,6 +21,7 @@ import com.creativemd.littletiles.common.event.ActionEvent;
 import com.creativemd.littletiles.common.event.ActionEvent.ActionType;
 import com.creativemd.littletiles.common.item.ItemPremadeStructure;
 import com.creativemd.littletiles.common.mod.chiselsandbits.ChiselsAndBitsManager;
+import com.creativemd.littletiles.common.mod.coloredlights.ColoredLightsManager;
 import com.creativemd.littletiles.common.packet.LittleBlockUpdatePacket;
 import com.creativemd.littletiles.common.packet.LittleBlocksUpdatePacket;
 import com.creativemd.littletiles.common.structure.LittleStructure;
@@ -32,11 +33,10 @@ import com.creativemd.littletiles.common.tile.math.identifier.LittleIdentifierAb
 import com.creativemd.littletiles.common.tile.math.vec.LittleAbsoluteVec;
 import com.creativemd.littletiles.common.tile.math.vec.LittleVec;
 import com.creativemd.littletiles.common.tile.math.vec.LittleVecContext;
+import com.creativemd.littletiles.common.tile.place.PlacePreview;
 import com.creativemd.littletiles.common.tile.preview.LittleAbsolutePreviews;
-import com.creativemd.littletiles.common.tile.preview.LittleAbsolutePreviewsStructure;
 import com.creativemd.littletiles.common.tile.preview.LittlePreview;
 import com.creativemd.littletiles.common.tile.preview.LittlePreviews;
-import com.creativemd.littletiles.common.tile.preview.LittlePreviewsStructure;
 import com.creativemd.littletiles.common.tileentity.TileEntityLittleTiles;
 import com.creativemd.littletiles.common.util.compression.LittleNBTCompressionTools;
 import com.creativemd.littletiles.common.util.grid.LittleGridContext;
@@ -125,7 +125,7 @@ public abstract class LittleAction extends CreativeCorePacket {
 			reverted.furtherActions = lastActions.get(index).revertFurtherActions();
 			
 			if (reverted.action(player)) {
-				MinecraftForge.EVENT_BUS.post(new ActionEvent(reverted, ActionType.undo));
+				MinecraftForge.EVENT_BUS.post(new ActionEvent(reverted, ActionType.undo, player));
 				if (reverted.sendToServer())
 					PacketHandler.sendPacketToServer(reverted);
 				
@@ -170,7 +170,7 @@ public abstract class LittleAction extends CreativeCorePacket {
 			reverted.furtherActions = lastActions.get(index).revertFurtherActions();
 			
 			if (reverted.action(player)) {
-				MinecraftForge.EVENT_BUS.post(new ActionEvent(reverted, ActionType.redo));
+				MinecraftForge.EVENT_BUS.post(new ActionEvent(reverted, ActionType.redo, player));
 				if (reverted.sendToServer())
 					PacketHandler.sendPacketToServer(reverted);
 				
@@ -242,7 +242,7 @@ public abstract class LittleAction extends CreativeCorePacket {
 		try {
 			if (action(player)) {
 				rememberAction(this);
-				MinecraftForge.EVENT_BUS.post(new ActionEvent(this, ActionType.normal));
+				MinecraftForge.EVENT_BUS.post(new ActionEvent(this, ActionType.normal, player));
 				
 				if (sendToServer())
 					PacketHandler.sendPacketToServer(this);
@@ -289,6 +289,14 @@ public abstract class LittleAction extends CreativeCorePacket {
 		}
 	}
 	
+	public boolean activateServer(EntityPlayer player) {
+		try {
+			return action(player);
+		} catch (LittleActionException e) {
+			return false;
+		}
+	}
+	
 	public abstract LittleAction flip(Axis axis, LittleAbsoluteBox box);
 	
 	@SideOnly(Side.CLIENT)
@@ -325,6 +333,24 @@ public abstract class LittleAction extends CreativeCorePacket {
 		return false;
 	}
 	
+	public static boolean canPlaceInside(LittlePreviews previews, World world, BlockPos pos, boolean placeInside) {
+		IBlockState state = world.getBlockState(pos);
+		Block block = state.getBlock();
+		if (block.isReplaceable(world, pos) || block instanceof BlockTile) {
+			if (!placeInside) {
+				TileEntity te = world.getTileEntity(pos);
+				if (te instanceof TileEntityLittleTiles) {
+					TileEntityLittleTiles teTiles = (TileEntityLittleTiles) te;
+					for (LittlePreview preview : previews.allPreviews())
+						if (!teTiles.isSpaceForLittleTile(preview.box))
+							return false;
+				}
+			}
+			return true;
+		}
+		return false;
+	}
+	
 	public static TileEntityLittleTiles loadTe(EntityPlayer player, World world, BlockPos pos, boolean shouldConvert) {
 		TileEntity tileEntity = world.getTileEntity(pos);
 		
@@ -334,9 +360,9 @@ public abstract class LittleAction extends CreativeCorePacket {
 			LittleGridContext context = chiselTiles != null ? LittleGridContext.get(ChiselsAndBitsManager.convertingFrom) : LittleGridContext.get();
 			if (chiselTiles != null)
 				tiles.addAll(chiselTiles);
-			else if (tileEntity == null) {
+			else if (tileEntity == null && shouldConvert) {
 				IBlockState state = world.getBlockState(pos);
-				if (shouldConvert && isBlockValid(state) && canConvertBlock(player, world, pos, state)) {
+				if (isBlockValid(state) && canConvertBlock(player, world, pos, state)) {
 					
 					context = LittleGridContext.get(LittleGridContext.minSize);
 					
@@ -470,6 +496,13 @@ public abstract class LittleAction extends CreativeCorePacket {
 			throw new LittleActionException.TileEntityNotFoundException();
 	}
 	
+	public static double getVolume(LittleGridContext context, List<PlacePreview> tiles) {
+		double volume = 0;
+		for (PlacePreview preview : tiles)
+			volume += preview.box.getPercentVolume(context);
+		return volume;
+	}
+	
 	public static void writeAbsoluteCoord(LittleIdentifierAbsolute coord, ByteBuf buf) {
 		writePos(buf, coord.pos);
 		buf.writeInt(coord.identifier.length);
@@ -492,18 +525,17 @@ public abstract class LittleAction extends CreativeCorePacket {
 		buf.writeBoolean(previews.isAbsolute());
 		buf.writeBoolean(previews.hasStructure());
 		if (previews.hasStructure())
-			writeNBT(buf, previews.getStructureData());
+			writeNBT(buf, previews.structure);
 		if (previews.isAbsolute())
 			writePos(buf, ((LittleAbsolutePreviews) previews).pos);
 		
-		writeContext(previews.context, buf);
+		writeContext(previews.getContext(), buf);
 		NBTTagCompound nbt = new NBTTagCompound();
 		nbt.setTag("list", LittleNBTCompressionTools.writePreviews(previews));
 		
 		NBTTagList children = new NBTTagList();
-		for (LittlePreviews child : previews.getChildren()) {
+		for (LittlePreviews child : previews.getChildren())
 			children.appendTag(LittlePreview.saveChildPreviews(child));
-		}
 		nbt.setTag("children", children);
 		
 		writeNBT(buf, nbt);
@@ -517,12 +549,12 @@ public abstract class LittleAction extends CreativeCorePacket {
 		LittlePreviews previews;
 		if (absolute) {
 			if (structure)
-				previews = LittleNBTCompressionTools.readPreviews(new LittleAbsolutePreviewsStructure(readNBT(buf), readPos(buf), readContext(buf)), (nbt = readNBT(buf)).getTagList("list", 10));
+				previews = LittleNBTCompressionTools.readPreviews(new LittleAbsolutePreviews(readNBT(buf), readPos(buf), readContext(buf)), (nbt = readNBT(buf)).getTagList("list", 10));
 			else
 				previews = LittleNBTCompressionTools.readPreviews(new LittleAbsolutePreviews(readPos(buf), readContext(buf)), (nbt = readNBT(buf)).getTagList("list", 10));
 		} else {
 			if (structure)
-				previews = LittleNBTCompressionTools.readPreviews(new LittlePreviewsStructure(readNBT(buf), readContext(buf)), (nbt = readNBT(buf)).getTagList("list", 10));
+				previews = LittleNBTCompressionTools.readPreviews(new LittlePreviews(readNBT(buf), readContext(buf)), (nbt = readNBT(buf)).getTagList("list", 10));
 			else
 				previews = LittleNBTCompressionTools.readPreviews(new LittlePreviews(readContext(buf)), (nbt = readNBT(buf)).getTagList("list", 10));
 		}
@@ -530,7 +562,7 @@ public abstract class LittleAction extends CreativeCorePacket {
 		NBTTagList list = nbt.getTagList("children", 10);
 		for (int i = 0; i < list.tagCount(); i++) {
 			NBTTagCompound child = list.getCompoundTagAt(i);
-			previews.addChild(LittlePreviews.getChild(previews.context, child));
+			previews.addChild(LittlePreviews.getChild(previews.getContext(), child));
 		}
 		return previews;
 	}
@@ -771,6 +803,8 @@ public abstract class LittleAction extends CreativeCorePacket {
 	public static boolean isBlockValid(IBlockState state) {
 		Block block = state.getBlock();
 		if (ChiselsAndBitsManager.isChiselsAndBitsStructure(state))
+			return true;
+		if (ColoredLightsManager.isBlockFromColoredBlocks(block))
 			return true;
 		if (block.hasTileEntity(state) || block instanceof BlockSlab)
 			return false;
